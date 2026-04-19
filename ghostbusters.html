@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ghostbusters: Single File Edition</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 30px;
+        }
+        canvas {
+            background-color: #887ECB; 
+            border: 20px solid #887ECB;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+            image-rendering: pixelated; 
+        }
+        .instructions {
+            margin-top: 15px;
+            background: #333;
+            padding: 15px;
+            border: 2px solid #887ECB;
+            text-align: center;
+            max-width: 600px;
+            font-size: 14px;
+        }
+        kbd {
+            background-color: #C0B083;
+            color: #000;
+            padding: 2px 6px;
+            font-weight: bold;
+        }
+        h2 {
+            color: #887ECB;
+            text-shadow: 2px 2px 0px #53C1B5;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>GHOSTBUSTERS</h2>
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+    
+    <div class="instructions">
+        <p><strong>PHASE 1 (DRIVE):</strong> <kbd>Left</kbd> and <kbd>Right</kbd> to steer Ecto-1. Dodge traffic.</p>
+        <p><strong>PHASE 2 (BUST):</strong> Use Arrows. Hold <kbd>SPACEBAR</kbd> to fire and trap.</p>
+        <p><em>This is a fully standalone file. No external images needed!</em></p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Game States: START, LOADING, DRIVING, ARRIVED, BUSTING, CAUGHT
+        let gameState = 'START'; 
+        let frameCount = 0;
+        let transitionTimer = 0;
+
+        const keys = { ArrowLeft: false, ArrowRight: false, Space: false };
+
+        // --- C64 PALETTE ---
+        const C64 = {
+            black: '#000000', white: '#FFFFFF', red: '#894036', cyan: '#70A4B2', 
+            purple: '#867ADE', green: '#588D43', blue: '#312885', yellow: '#B8C76F', 
+            orange: '#8B4513', brown: '#6A5400', lightRed: '#A85353', darkGray: '#444444', 
+            gray: '#6C6C6C', lightGreen: '#9AD284', lightBlue: '#6C5EB5', 
+            lightGray: '#959595', khaki: '#C0B083', skin: '#E9B68C'
+        };
+
+        // --- AUDIO SYSTEM (RAY PARKER JR. THEME) ---
+        let audioCtx;
+        let noteIndex = 0;
+        const bassline = [123.47, 123.47, 155.56, 123.47, 110.00, 110.00, 82.41, 110.00, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        function playMusic() {
+            if (gameState === 'CAUGHT') return; 
+            const freq = bassline[noteIndex];
+            const duration = 0.12; 
+
+            if (freq > 0) {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'square'; 
+                osc.frequency.value = freq;
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0.06, audioCtx.currentTime); 
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration - 0.01);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            }
+            noteIndex = (noteIndex + 1) % bassline.length;
+            setTimeout(playMusic, 140); 
+        }
+
+        // --- IMAGE LOADING (EMBEDDED BASE64) ---
+        let ectoImage = new Image();
+        let imagesLoaded = 0;
+
+        ectoImage.onload = () => {
+            imagesLoaded++;
+            if (gameState === 'LOADING') {
+                gameState = 'DRIVING'; // Ready to play!
+            }
+        };
+
+        // Paste your Base64 string between the quotes below to use your specific image!
+        // Right now, this is a placeholder vector string so the game runs perfectly out of the box.
+        const ecto1Base64 = "data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 100'%3E%3Crect width='50' height='100' rx='5' fill='%23FFFFFF'/%3E%3Crect x='5' y='10' width='40' height='25' fill='%2370A4B2'/%3E%3Crect x='5' y='65' width='40' height='25' fill='%2370A4B2'/%3E%3Crect x='20' y='45' width='10' height='10' fill='%23894036'/%3E%3Crect x='0' y='20' width='3' height='60' fill='%23894036'/%3E%3Crect x='47' y='20' width='3' height='60' fill='%23894036'/%3E%3C/svg%3E";
+        
+        ectoImage.src = ecto1Base64;
+
+        // --- ENTITIES ---
+        let distanceToGo = 800;
+        let roadYOffset = 0;
+        const ecto1 = { x: 380, y: 300, width: 48, height: 96, speed: 5, isHit: false };
+        let traffic = [];
+
+        const buster = { x: 100, y: 320, width: 30, height: 60, speed: 4 };
+        const trap = { x: 400, y: 375, width: 40, height: 10, isOpen: false };
+        const ghost = { x: 600, y: 100, width: 40, height: 40, dx: 3, dy: 2, isTethered: false };
+        let streamWobble = 0;
+
+        // --- INPUT ---
+        window.addEventListener('keydown', (e) => {
+            if (gameState === 'START' && e.code === 'Space') {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                playMusic();
+                
+                // If image loaded instantly from Base64, skip LOADING screen
+                if (imagesLoaded > 0) {
+                    gameState = 'DRIVING';
+                } else {
+                    gameState = 'LOADING';
+                }
+            }
+            if (e.code === 'ArrowLeft') keys.ArrowLeft = true;
+            if (e.code === 'ArrowRight') keys.ArrowRight = true;
+            if (e.code === 'Space') keys.Space = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'ArrowLeft') keys.ArrowLeft = false;
+            if (e.code === 'ArrowRight') keys.ArrowRight = false;
+            if (e.code === 'Space') keys.Space = false;
+        });
+
+        // --- UPDATE LOGIC ---
+        function update() {
+            frameCount++;
+
+            if (gameState === 'DRIVING') {
+                distanceToGo--;
+                roadYOffset = (roadYOffset + 10) % 40;
+
+                if (keys.ArrowLeft && ecto1.x > 200) ecto1.x -= ecto1.speed;
+                if (keys.ArrowRight && ecto1.x < 560 - ecto1.width) ecto1.x += ecto1.speed;
+
+                if (Math.random() < 0.03) {
+                    traffic.push({
+                        x: 210 + Math.random() * 340,
+                        y: -100,
+                        width: 40,
+                        height: 70,
+                        speed: 3 + Math.random() * 4,
+                        color: Math.random() > 0.5 ? C64.lightRed : C64.blue
+                    });
+                }
+
+                ecto1.isHit = false;
+                for (let i = traffic.length - 1; i >= 0; i--) {
+                    let car = traffic[i];
+                    car.y += car.speed + 2; 
+
+                    if (ecto1.x < car.x + car.width && ecto1.x + ecto1.width > car.x &&
+                        ecto1.y < car.y + car.height && ecto1.y + ecto1.height > car.y) {
+                        ecto1.isHit = true;
+                        distanceToGo += 2; 
+                    }
+
+                    if (car.y > canvas.height) {
+                        traffic.splice(i, 1);
+                    }
+                }
+
+                if (distanceToGo <= 0) {
+                    gameState = 'ARRIVED';
+                    transitionTimer = 100; 
+                }
+            } 
+            else if (gameState === 'ARRIVED') {
+                transitionTimer--;
+                if (transitionTimer <= 0) {
+                    gameState = 'BUSTING';
+                }
+            }
+            else if (gameState === 'BUSTING') {
+                if (keys.ArrowLeft && buster.x > 0) buster.x -= buster.speed;
+                if (keys.ArrowRight && buster.x < canvas.width - buster.width) buster.x += buster.speed;
+
+                ghost.isTethered = false;
+                trap.isOpen = false;
+
+                if (keys.Space) {
+                    if (ghost.x > buster.x) {
+                        ghost.isTethered = true;
+                        trap.isOpen = true; 
+                    }
+                }
+
+                if (ghost.isTethered) {
+                    const pullSpeed = 1.5;
+                    if (ghost.x > trap.x + 10) ghost.x -= pullSpeed;
+                    if (ghost.x < trap.x - 10) ghost.x += pullSpeed;
+                    if (ghost.y < trap.y) ghost.y += pullSpeed;
+
+                    if (Math.abs(ghost.x - trap.x) < 30 && Math.abs(ghost.y - trap.y) < 30) {
+                        gameState = 'CAUGHT';
+                    }
+                } else {
+                    ghost.x += ghost.dx;
+                    ghost.y += ghost.dy;
+                    if (ghost.x + ghost.width > canvas.width || ghost.x < 0) ghost.dx *= -1;
+                    if (ghost.y + ghost.height > canvas.height - 100 || ghost.y < 20) ghost.dy *= -1;
+                }
+
+                streamWobble = (streamWobble + 1) % 10;
+            }
+        }
+
+        // --- DRAW LOGIC ---
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (gameState === 'START') {
+                ctx.fillStyle = C64.black;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = C64.yellow;
+                ctx.font = 'bold 30px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('GHOSTBUSTERS C64', canvas.width / 2, canvas.height / 2 - 20);
+                
+                if (Math.floor(frameCount / 20) % 2 === 0) {
+                    ctx.fillStyle = C64.white;
+                    ctx.font = 'bold 20px Courier New';
+                    ctx.fillText('PRESS SPACE TO START', canvas.width / 2, canvas.height / 2 + 30);
+                }
+            } 
+            else if (gameState === 'LOADING') {
+                ctx.fillStyle = C64.black;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = C64.white;
+                ctx.font = '20px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('PROCESSING EMBEDDED SPRITE...', canvas.width / 2, canvas.height / 2);
+            }
+            else if (gameState === 'DRIVING' || gameState === 'ARRIVED') {
+                ctx.fillStyle = C64.green;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.fillStyle = C64.gray;
+                ctx.fillRect(180, 0, 440, canvas.height);
+
+                ctx.fillStyle = C64.white;
+                for (let y = -40; y < canvas.height; y += 80) {
+                    ctx.fillRect(395, y + roadYOffset, 10, 40);
+                }
+
+                traffic.forEach(car => {
+                    ctx.fillStyle = car.color;
+                    ctx.fillRect(car.x, car.y, car.width, car.height);
+                    ctx.fillStyle = C64.cyan; 
+                    ctx.fillRect(car.x + 5, car.y + 10, 30, 15);
+                    ctx.fillRect(car.x + 5, car.y + 45, 30, 15);
+                });
+
+                // --- DRAW DETAILED ECTO-1 SPRITE ---
+                if (!ecto1.isHit || Math.floor(frameCount / 5) % 2 === 0) {
+                    if (imagesLoaded > 0) {
+                        ctx.drawImage(ectoImage, ecto1.x, ecto1.y, ecto1.width, ecto1.height);
+                    }
+                }
+
+                ctx.fillStyle = C64.black;
+                ctx.fillRect(0, 0, canvas.width, 30);
+                ctx.fillStyle = C64.yellow;
+                ctx.font = 'bold 20px Courier New';
+                ctx.textAlign = 'left';
+                ctx.fillText(`MILES TO GO: ${Math.max(0, Math.floor(distanceToGo / 10))}`, 10, 22);
+
+                if (gameState === 'ARRIVED') {
+                    ctx.fillStyle = C64.black;
+                    ctx.fillRect(canvas.width / 2 - 180, canvas.height / 2 - 30, 360, 60);
+                    ctx.fillStyle = C64.khaki;
+                    ctx.textAlign = 'center';
+                    ctx.fillText('ARRIVED AT HAUNTED BUILDING', canvas.width / 2, canvas.height / 2 + 8);
+                }
+            } 
+            else if (gameState === 'BUSTING' || gameState === 'CAUGHT') {
+                ctx.fillStyle = C64.black;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = C64.red;
+                ctx.fillRect(0, 50, canvas.width, 335);
+                ctx.fillStyle = C64.black; 
+                for(let w = 40; w < canvas.width; w += 120) {
+                    ctx.fillRect(w, 80, 60, 90);
+                    ctx.fillRect(w, 220, 60, 90);
+                    ctx.fillStyle = C64.darkGray;
+                    ctx.fillRect(w + 28, 80, 4, 90);
+                    ctx.fillRect(w, 120, 60, 4);
+                    ctx.fillRect(w + 28, 220, 4, 90);
+                    ctx.fillRect(w, 260, 60, 4);
+                    ctx.fillStyle = C64.black;
+                }
+
+                ctx.fillStyle = C64.gray;
+                ctx.fillRect(0, 385, canvas.width, 15);
+
+                ctx.fillStyle = C64.darkGray;
+                ctx.fillRect(trap.x, trap.y, trap.width, trap.height);
+                ctx.fillStyle = C64.yellow; 
+                ctx.fillRect(trap.x + 5, trap.y - 2, 30, 2);
+                
+                if (trap.isOpen) {
+                    ctx.fillStyle = 'rgba(184, 199, 111, 0.4)'; 
+                    ctx.beginPath();
+                    ctx.moveTo(trap.x, trap.y);
+                    ctx.lineTo(trap.x - 40, trap.y - 150);
+                    ctx.lineTo(trap.x + trap.width + 40, trap.y - 150);
+                    ctx.lineTo(trap.x + trap.width, trap.y);
+                    ctx.fill();
+                } else {
+                    if (Math.floor(frameCount / 15) % 2 === 0) {
+                        ctx.fillStyle = C64.lightRed;
+                        ctx.fillRect(trap.x + 30, trap.y + 2, 4, 4);
+                    }
+                }
+
+                ctx.fillStyle = C64.black;
+                ctx.fillRect(buster.x - 12, buster.y + 12, 16, 26);
+                ctx.fillStyle = C64.khaki;
+                ctx.fillRect(buster.x, buster.y + 16, 24, 30);
+                let legOffset = (keys.ArrowLeft || keys.ArrowRight) && Math.floor(frameCount / 10) % 2 === 0 ? 4 : 0;
+                ctx.fillRect(buster.x, buster.y + 46 - legOffset, 10, 18);
+                ctx.fillRect(buster.x + 14, buster.y + 46 + legOffset, 10, 18);
+                ctx.fillStyle = C64.skin;
+                ctx.fillRect(buster.x + 4, buster.y, 16, 16);
+                ctx.fillStyle = C64.darkGray;
+                ctx.fillRect(buster.x + 10, buster.y + 24, 34, 6);
+
+                if (gameState !== 'CAUGHT') {
+                    ctx.fillStyle = C64.purple;
+                    ctx.fillRect(ghost.x + 4, ghost.y, 32, 8); 
+                    ctx.fillRect(ghost.x, ghost.y + 8, 40, 24); 
+                    let jag = Math.floor(frameCount / 10) % 2 === 0 ? 0 : 4;
+                    ctx.fillRect(ghost.x + jag, ghost.y + 32, 8, 8);
+                    ctx.fillRect(ghost.x + 16, ghost.y + 32 + jag, 8, 8);
+                    ctx.fillRect(ghost.x + 32 - jag, ghost.y + 32, 8, 8);
+                    ctx.fillStyle = C64.white;
+                    ctx.fillRect(ghost.x + 8, ghost.y + 12, 8, 8);
+                    ctx.fillRect(ghost.x + 24, ghost.y + 12, 8, 8);
+                    ctx.fillStyle = C64.black;
+                    let lookDir = ghost.dx > 0 ? 4 : 0; 
+                    ctx.fillRect(ghost.x + 8 + lookDir, ghost.y + 14, 4, 4);
+                    ctx.fillRect(ghost.x + 24 + lookDir, ghost.y + 14, 4, 4);
+                }
+
+                if (keys.Space && ghost.isTethered && gameState === 'BUSTING') {
+                    const wandX = buster.x + buster.width + 14;
+                    const wandY = buster.y + 26;
+                    const targetX = ghost.x + ghost.width / 2;
+                    const targetY = ghost.y + ghost.height / 2;
+
+                    ctx.strokeStyle = C64.cyan;
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(wandX, wandY);
+                    ctx.lineTo(targetX, targetY);
+                    ctx.stroke();
+
+                    ctx.strokeStyle = streamWobble > 5 ? C64.yellow : C64.white;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(wandX, wandY);
+                    
+                    let segments = 5;
+                    for (let i = 1; i <= segments; i++) {
+                        let midX = wandX + ((targetX - wandX) / segments) * i;
+                        let midY = wandY + ((targetY - wandY) / segments) * i;
+                        midX += (Math.random() - 0.5) * 24;
+                        midY += (Math.random() - 0.5) * 24;
+                        if(i === segments) {
+                            ctx.lineTo(targetX, targetY);
+                        } else {
+                            ctx.lineTo(midX, midY);
+                        }
+                    }
+                    ctx.stroke();
+                }
+
+                if (gameState === 'CAUGHT') {
+                    ctx.fillStyle = C64.green;
+                    ctx.fillRect(canvas.width / 2 - 150, canvas.height / 2 - 40, 300, 80);
+                    ctx.fillStyle = C64.black;
+                    ctx.font = 'bold 24px Courier New';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('GHOST TRAPPED!', canvas.width / 2, canvas.height / 2);
+                    ctx.font = '14px Courier New';
+                    ctx.fillText('Refresh to play again', canvas.width / 2, canvas.height / 2 + 25);
+                }
+            }
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+    </script>
+</body>
+</html>
+
