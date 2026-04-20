@@ -48,7 +48,7 @@
     <canvas id="gameCanvas" width="800" height="400"></canvas>
     
     <div class="instructions">
-        <p><strong>PHASE 1 (DRIVE):</strong> <kbd>Left</kbd> and <kbd>Right</kbd> to steer Ecto-1. Dodge traffic.</p>
+        <p><strong>PHASE 1 (DRIVE):</strong> <kbd>Left</kbd> and <kbd>Right</kbd> to steer Ecto-1. Dodge ghosts to save health!</p>
         <p><strong>PHASE 2 (BUST):</strong> Use Arrows. Hold <kbd>SPACEBAR</kbd> to fire and trap.</p>
         <p><em>This is a fully standalone file. No external images needed!</em></p>
     </div>
@@ -57,7 +57,7 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
 
-        // Game States: START, LOADING, DRIVING, ARRIVED, BUSTING, CAUGHT
+        // Game States: START, LOADING, DRIVING, ARRIVED, BUSTING, CAUGHT, GAME_OVER
         let gameState = 'START'; 
         let frameCount = 0;
         let transitionTimer = 0;
@@ -79,7 +79,7 @@
         const bassline = [123.47, 123.47, 155.56, 123.47, 110.00, 110.00, 82.41, 110.00, 0, 0, 0, 0, 0, 0, 0, 0];
 
         function playMusic() {
-            if (gameState === 'CAUGHT') return; 
+            if (gameState === 'CAUGHT' || gameState === 'GAME_OVER') return; 
             const freq = bassline[noteIndex];
             const duration = 0.12; 
 
@@ -106,21 +106,20 @@
         ectoImage.onload = () => {
             imagesLoaded++;
             if (gameState === 'LOADING') {
-                gameState = 'DRIVING'; // Ready to play!
+                gameState = 'DRIVING'; 
             }
         };
 
-        // Paste your Base64 string between the quotes below to use your specific image!
-        // Right now, this is a placeholder vector string so the game runs perfectly out of the box.
         const ecto1Base64 = "data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 100'%3E%3Crect width='50' height='100' rx='5' fill='%23FFFFFF'/%3E%3Crect x='5' y='10' width='40' height='25' fill='%2370A4B2'/%3E%3Crect x='5' y='65' width='40' height='25' fill='%2370A4B2'/%3E%3Crect x='20' y='45' width='10' height='10' fill='%23894036'/%3E%3Crect x='0' y='20' width='3' height='60' fill='%23894036'/%3E%3Crect x='47' y='20' width='3' height='60' fill='%23894036'/%3E%3C/svg%3E";
         
         ectoImage.src = ecto1Base64;
 
-        // --- ENTITIES ---
+        // --- ENTITIES & STATS ---
         let distanceToGo = 800;
+        let playerHealth = 100; 
         let roadYOffset = 0;
         const ecto1 = { x: 380, y: 300, width: 48, height: 96, speed: 5, isHit: false };
-        let traffic = [];
+        let roamers = []; 
 
         const buster = { x: 100, y: 320, width: 30, height: 60, speed: 4 };
         const trap = { x: 400, y: 375, width: 40, height: 10, isOpen: false };
@@ -133,7 +132,6 @@
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 playMusic();
                 
-                // If image loaded instantly from Base64, skip LOADING screen
                 if (imagesLoaded > 0) {
                     gameState = 'DRIVING';
                 } else {
@@ -162,34 +160,55 @@
                 if (keys.ArrowLeft && ecto1.x > 200) ecto1.x -= ecto1.speed;
                 if (keys.ArrowRight && ecto1.x < 560 - ecto1.width) ecto1.x += ecto1.speed;
 
+                // Spawn Roaming Ghosts
                 if (Math.random() < 0.03) {
-                    traffic.push({
-                        x: 210 + Math.random() * 340,
+                    const ghostColors = [C64.purple, C64.lightGreen, C64.cyan];
+                    roamers.push({
+                        x: 210 + Math.random() * 320,
                         y: -100,
                         width: 40,
-                        height: 70,
-                        speed: 3 + Math.random() * 4,
-                        color: Math.random() > 0.5 ? C64.lightRed : C64.blue
+                        height: 40,
+                        speed: 1.5 + Math.random() * 2, 
+                        color: ghostColors[Math.floor(Math.random() * ghostColors.length)],
+                        wobbleOffset: Math.random() * Math.PI * 2
                     });
                 }
 
                 ecto1.isHit = false;
-                for (let i = traffic.length - 1; i >= 0; i--) {
-                    let car = traffic[i];
-                    car.y += car.speed + 2; 
+                for (let i = roamers.length - 1; i >= 0; i--) {
+                    let r = roamers[i];
+                    r.y += r.speed; 
+                    
+                    r.x += Math.sin(frameCount * 0.05 + r.wobbleOffset) * 2.5;
 
-                    if (ecto1.x < car.x + car.width && ecto1.x + ecto1.width > car.x &&
-                        ecto1.y < car.y + car.height && ecto1.y + ecto1.height > car.y) {
+                    if (r.x < 180) r.x = 180;
+                    if (r.x > 580 - r.width) r.x = 580 - r.width;
+
+                    // --- COLLISION LOGIC ---
+                    if (ecto1.x < r.x + r.width && ecto1.x + ecto1.width > r.x &&
+                        ecto1.y < r.y + r.height && ecto1.y + ecto1.height > r.y) {
+                        
                         ecto1.isHit = true;
-                        distanceToGo += 2; 
+                        
+                        // *** CHANGE DAMAGE HERE ***
+                        // Previously this was 20. Change this number to tweak difficulty.
+                        playerHealth -= 10; 
+                        
+                        roamers.splice(i, 1); 
+                        
+                        if (playerHealth <= 0) {
+                            playerHealth = 0;
+                            gameState = 'GAME_OVER';
+                        }
+                        continue;
                     }
 
-                    if (car.y > canvas.height) {
-                        traffic.splice(i, 1);
+                    if (r.y > canvas.height) {
+                        roamers.splice(i, 1);
                     }
                 }
 
-                if (distanceToGo <= 0) {
+                if (distanceToGo <= 0 && gameState !== 'GAME_OVER') {
                     gameState = 'ARRIVED';
                     transitionTimer = 100; 
                 }
@@ -260,7 +279,7 @@
                 ctx.textAlign = 'center';
                 ctx.fillText('PROCESSING EMBEDDED SPRITE...', canvas.width / 2, canvas.height / 2);
             }
-            else if (gameState === 'DRIVING' || gameState === 'ARRIVED') {
+            else if (gameState === 'DRIVING' || gameState === 'ARRIVED' || gameState === 'GAME_OVER') {
                 ctx.fillStyle = C64.green;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 
@@ -272,16 +291,27 @@
                     ctx.fillRect(395, y + roadYOffset, 10, 40);
                 }
 
-                traffic.forEach(car => {
-                    ctx.fillStyle = car.color;
-                    ctx.fillRect(car.x, car.y, car.width, car.height);
-                    ctx.fillStyle = C64.cyan; 
-                    ctx.fillRect(car.x + 5, car.y + 10, 30, 15);
-                    ctx.fillRect(car.x + 5, car.y + 45, 30, 15);
+                roamers.forEach(r => {
+                    ctx.fillStyle = r.color;
+                    ctx.fillRect(r.x + 4, r.y, 32, 8); 
+                    ctx.fillRect(r.x, r.y + 8, 40, 24); 
+                    
+                    let jag = Math.floor(frameCount / 10) % 2 === 0 ? 0 : 4;
+                    ctx.fillRect(r.x + jag, r.y + 32, 8, 8);
+                    ctx.fillRect(r.x + 16, r.y + 32 + jag, 8, 8);
+                    ctx.fillRect(r.x + 32 - jag, r.y + 32, 8, 8);
+                    
+                    ctx.fillStyle = C64.white;
+                    ctx.fillRect(r.x + 8, r.y + 12, 8, 8);
+                    ctx.fillRect(r.x + 24, r.y + 12, 8, 8);
+                    
+                    ctx.fillStyle = C64.black;
+                    let lookDir = Math.sin(frameCount * 0.05 + r.wobbleOffset) > 0 ? 4 : 0; 
+                    ctx.fillRect(r.x + 8 + lookDir, r.y + 14, 4, 4);
+                    ctx.fillRect(r.x + 24 + lookDir, r.y + 14, 4, 4);
                 });
 
-                // --- DRAW DETAILED ECTO-1 SPRITE ---
-                if (!ecto1.isHit || Math.floor(frameCount / 5) % 2 === 0) {
+                if (gameState !== 'GAME_OVER' && (!ecto1.isHit || Math.floor(frameCount / 5) % 2 === 0)) {
                     if (imagesLoaded > 0) {
                         ctx.drawImage(ectoImage, ecto1.x, ecto1.y, ecto1.width, ecto1.height);
                     }
@@ -289,10 +319,23 @@
 
                 ctx.fillStyle = C64.black;
                 ctx.fillRect(0, 0, canvas.width, 30);
+                
                 ctx.fillStyle = C64.yellow;
                 ctx.font = 'bold 20px Courier New';
                 ctx.textAlign = 'left';
                 ctx.fillText(`MILES TO GO: ${Math.max(0, Math.floor(distanceToGo / 10))}`, 10, 22);
+
+                ctx.fillStyle = C64.white;
+                ctx.fillText('HEALTH:', 450, 22);
+                
+                ctx.fillStyle = C64.darkGray;
+                ctx.fillRect(540, 8, 200, 14); 
+                
+                if (playerHealth > 50) ctx.fillStyle = C64.lightGreen;
+                else if (playerHealth > 20) ctx.fillStyle = C64.yellow;
+                else ctx.fillStyle = C64.lightRed;
+                
+                ctx.fillRect(540, 8, playerHealth * 2, 14); 
 
                 if (gameState === 'ARRIVED') {
                     ctx.fillStyle = C64.black;
@@ -300,6 +343,18 @@
                     ctx.fillStyle = C64.khaki;
                     ctx.textAlign = 'center';
                     ctx.fillText('ARRIVED AT HAUNTED BUILDING', canvas.width / 2, canvas.height / 2 + 8);
+                }
+
+                if (gameState === 'GAME_OVER') {
+                    ctx.fillStyle = 'rgba(137, 64, 54, 0.8)'; 
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = C64.black;
+                    ctx.font = 'bold 40px Courier New';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('ECTO-1 DESTROYED!', canvas.width / 2, canvas.height / 2);
+                    ctx.fillStyle = C64.white;
+                    ctx.font = '20px Courier New';
+                    ctx.fillText('Refresh the page to try again.', canvas.width / 2, canvas.height / 2 + 40);
                 }
             } 
             else if (gameState === 'BUSTING' || gameState === 'CAUGHT') {
@@ -427,4 +482,3 @@
     </script>
 </body>
 </html>
-
