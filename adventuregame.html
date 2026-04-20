@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twin Kingdom Valley: Web Edition</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #dcdcdc;
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        #game-container {
+            width: 100%;
+            max-width: 700px;
+            background-color: #000;
+            border: 2px solid #555;
+            padding: 15px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.8);
+        }
+        #image-container {
+            width: 100%;
+            height: 350px;
+            background-color: #222;
+            margin-bottom: 15px;
+            border: 1px solid #444;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        #image-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #status-bar {
+            background-color: #333;
+            padding: 10px;
+            display: flex;
+            justify-content: space-between;
+            font-weight: bold;
+            border-bottom: 2px solid #555;
+            margin-bottom: 10px;
+        }
+        #output {
+            height: 300px;
+            overflow-y: auto;
+            padding: 10px;
+            background-color: #111;
+            border: 1px solid #333;
+            margin-bottom: 10px;
+            line-height: 1.4;
+        }
+        .message { color: #aaa; margin-bottom: 10px; font-style: italic; }
+        .room-title { color: #4da6ff; font-weight: bold; font-size: 1.1em; }
+        .room-desc { color: #fff; margin-bottom: 5px; }
+        .entities { color: #ffcc00; }
+        .exits { color: #5cd65c; margin-bottom: 10px; }
+        .error { color: #ff6666; }
+        .combat { color: #ff3333; font-weight: bold; }
+        
+        #input-container {
+            display: flex;
+            gap: 10px;
+        }
+        #cmd-input {
+            flex-grow: 1;
+            padding: 10px;
+            background-color: #222;
+            color: #00ff00;
+            border: 1px solid #555;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 1em;
+            outline: none;
+        }
+        #cmd-input:focus { border-color: #4da6ff; }
+        button {
+            padding: 10px 15px;
+            background-color: #444;
+            color: #fff;
+            border: 1px solid #666;
+            cursor: pointer;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        button:hover { background-color: #555; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="image-container">
+        <img id="scene-image" src="" alt="Scene Image">
+    </div>
+    
+    <div id="status-bar">
+        <span id="score-display">Score: 0</span>
+        <span id="hp-display">HP: 20</span>
+        <span id="turns-display">Turns: 0</span>
+    </div>
+
+    <div id="output"></div>
+
+    <div id="input-container">
+        <input type="text" id="cmd-input" placeholder="e.g., 'go north', 'take sword', 'hit witch with sword'" autocomplete="off" autofocus>
+        <button onclick="submitCommand()">Enter</button>
+    </div>
+</div>
+
+<script>
+// Map inspired by Twin Kingdom Valley biomes
+const rooms = {
+    home: {
+        name: "Forest Cottage (Home)",
+        desc: "A small, safe wooden cottage on the edge of the valley. This is where you must bring your treasure.",
+        exits: { north: "forest1" },
+        items: [],
+        imagePrompt: "pixel art retro 8-bit game forest cottage safe haven"
+    },
+    forest1: {
+        name: "Dense Forest",
+        desc: "Thick ancient trees block out the sun. The path continues north, or you can return south.",
+        exits: { south: "home", north: "crossroads" },
+        items: ["sword"],
+        imagePrompt: "pixel art retro 8-bit game dense dark green forest"
+    },
+    crossroads: {
+        name: "Valley Crossroads",
+        desc: "A junction in the valley. To the north lies a great Castle. To the east is a scorching Desert. To the west is a murky Swamp.",
+        exits: { south: "forest1", north: "castle_gates", east: "desert", west: "swamp" },
+        items: [],
+        imagePrompt: "pixel art retro 8-bit game dirt crossroads signpost forest"
+    },
+    desert: {
+        name: "Scorching Desert",
+        desc: "Rolling dunes of hot sand stretch as far as you can see.",
+        exits: { west: "crossroads" },
+        items: ["jewel"],
+        imagePrompt: "pixel art retro 8-bit game hot sandy desert dunes"
+    },
+    swamp: {
+        name: "Murky Swamp",
+        desc: "Bubbling mud and dead trees. The stench is unbearable.",
+        exits: { east: "crossroads", north: "cave_entrance" },
+        items: [],
+        // UPDATED: Changed the prompt to force a fresh, safe image generation
+        imagePrompt: "pixel art retro 8-bit style marshland with green water and dead trees"
+    },
+    castle_gates: {
+        name: "Castle Gates",
+        desc: "Massive iron gates stand open, leading into the stone fortress.",
+        exits: { south: "crossroads", north: "courtyard" },
+        items: [],
+        imagePrompt: "pixel art retro 8-bit game massive iron stone castle gates"
+    },
+    courtyard: {
+        name: "Castle Courtyard",
+        desc: "A wide stone courtyard inside the castle walls.",
+        exits: { south: "castle_gates", north: "throne_room" },
+        items: ["chalice"],
+        imagePrompt: "pixel art retro 8-bit game stone castle courtyard"
+    },
+    throne_room: {
+        name: "King's Throne Room",
+        desc: "A grand hall with ruined banners and a massive, empty throne.",
+        exits: { south: "courtyard" },
+        items: ["crown"],
+        imagePrompt: "pixel art retro 8-bit game grand castle throne room"
+    },
+    cave_entrance: {
+        name: "Cave Entrance",
+        desc: "A dark opening in the rock face, leading deep underground.",
+        exits: { south: "swamp", down: "dungeon" },
+        items: [],
+        imagePrompt: "pixel art retro 8-bit game dark cave entrance"
+    },
+    dungeon: {
+        name: "Deep Dungeon",
+        desc: "A pitch-black cavern littered with the bones of previous adventurers.",
+        exits: { up: "cave_entrance" },
+        items: ["gold"],
+        imagePrompt: "pixel art retro 8-bit game dark underground stone dungeon"
+    }
+};
+
+const itemsData = {
+    sword: { name: "sword", isWeapon: true, value: 0 },
+    gold: { name: "gold", isWeapon: false, value: 100 },
+    jewel: { name: "jewel", isWeapon: false, value: 150 },
+    chalice: { name: "chalice", isWeapon: false, value: 200 },
+    crown: { name: "crown", isWeapon: false, value: 500 }
+};
+
+const npcs = {
+    gorilla: { name: "gorilla", loc: "desert", friendly: false, hp: 6, dead: false },
+    elf: { name: "elf", loc: "forest1", friendly: true, hp: 4, dead: false },
+    strong_elf: { name: "strong elf", loc: "crossroads", friendly: true, hp: 8, dead: false },
+    witch: { name: "witch", loc: "swamp", friendly: false, hp: 5, dead: false },
+    giant: { name: "giant", loc: "dungeon", friendly: false, hp: 12, dead: false },
+    goblin: { name: "goblin", loc: "cave_entrance", friendly: false, hp: 3, dead: false }
+};
+
+// Game State
+let player = {
+    loc: "home",
+    inv: [],
+    score: 0,
+    hp: 20
+};
+let turns = 0;
+let gameOver = false;
+
+// DOM Elements
+const outputDiv = document.getElementById("output");
+const inputField = document.getElementById("cmd-input");
+const imgContainer = document.getElementById("image-container");
+
+inputField.addEventListener("keypress", function(event) {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        submitCommand();
+    }
+});
+
+function printLog(html) {
+    const p = document.createElement("div");
+    p.innerHTML = html;
+    outputDiv.appendChild(p);
+    outputDiv.scrollTop = outputDiv.scrollHeight;
+}
+
+function updateImage() {
+    const prompt = rooms[player.loc].imagePrompt;
+    // Added a random seed to the URL to ensure it bypasses any broken cached versions
+    const randomSeed = Math.floor(Math.random() * 100000);
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=700&height=350&nologo=true&seed=${randomSeed}`;
+
+    const newImg = new Image();
+    newImg.id = "scene-image"; 
+    newImg.alt = "Scene Image";
+    newImg.src = url; 
+
+    newImg.onerror = function() {
+        printLog(`<span class="error">[Image failed to load: ${player.loc}]</span>`);
+    };
+
+    imgContainer.innerHTML = ''; 
+    imgContainer.appendChild(newImg); 
+}
+
+function updateStatus() {
+    document.getElementById("score-display").innerText = `Score: ${player.score}`;
+    document.getElementById("hp-display").innerText = `HP: ${player.hp}`;
+    document.getElementById("turns-display").innerText = `Turns: ${turns}`;
+}
+
+function look() {
+    const room = rooms[player.loc];
+    let html = `<div class="room-title">${room.name}</div>`;
+    html += `<div class="room-desc">${room.desc}</div>`;
+    
+    if (room.items.length > 0) {
+        html += `<div class="entities">You see: ${room.items.join(", ")}</div>`;
+    }
+    
+    let npcsHere = [];
+    for (let key in npcs) {
+        if (npcs[key].loc === player.loc && !npcs[key].dead) {
+            npcsHere.push(npcs[key].name);
+        }
+    }
+    if (npcsHere.length > 0) {
+        html += `<div class="entities">Characters here: ${npcsHere.join(", ")}</div>`;
+    }
+
+    const exitsStr = Object.keys(room.exits).join(", ");
+    html += `<div class="exits">Exits: ${exitsStr}</div>`;
+    
+    printLog(html);
+    updateImage();
+}
+
+function processNPCs() {
+    let npcMessages = "";
+    
+    for (let key in npcs) {
+        let npc = npcs[key];
+        if (npc.dead) continue;
+
+        if (!npc.friendly && npc.loc === player.loc) {
+            let damage = Math.floor(Math.random() * 3) + 1;
+            player.hp -= damage;
+            npcMessages += `<br><span class="combat">The ${npc.name} hits you! (-${damage} HP)</span>`;
+            if (player.hp <= 0) {
+                gameOver = true;
+                npcMessages += `<br><span class="combat">You have been slain... Game Over. Refresh to restart.</span>`;
+            }
+        } else {
+            if (Math.random() > 0.6) {
+                let possibleExits = Object.keys(rooms[npc.loc].exits);
+                let chosenExit = possibleExits[Math.floor(Math.random() * possibleExits.length)];
+                let oldLoc = npc.loc;
+                npc.loc = rooms[npc.loc].exits[chosenExit];
+                
+                if (oldLoc === player.loc) {
+                    npcMessages += `<br><span class="message">The ${npc.name} wanders away to the ${chosenExit}.</span>`;
+                } else if (npc.loc === player.loc) {
+                    npcMessages += `<br><span class="message">The ${npc.name} arrives.</span>`;
+                }
+            }
+        }
+    }
+    return npcMessages;
+}
+
+function submitCommand() {
+    if (gameOver) return;
+    
+    let cmdStr = inputField.value.trim().toLowerCase();
+    cmdStr = cmdStr.replace(/\s+/g, ' '); 
+    inputField.value = "";
+    if (cmdStr === "") return;
+
+    printLog(`<div class="message">> ${cmdStr}</div>`);
+    
+    let actionResult = parseCommand(cmdStr);
+    
+    if (actionResult !== false) {
+        turns++;
+        let npcActions = processNPCs();
+        updateStatus();
+        
+        if (actionResult !== true && typeof actionResult === "string") {
+            printLog(actionResult);
+        }
+        
+        if (npcActions !== "") {
+            printLog(npcActions);
+        }
+
+        if (cmdStr.startsWith("go ") || cmdStr === "look" || ["north","south","east","west","up","down"].includes(cmdStr)) {
+            if (!gameOver) look();
+        }
+    }
+}
+
+function parseCommand(cmd) {
+    const parts = cmd.split(" ");
+    const verb = parts[0];
+    
+    if (["go", "move", "walk"].includes(verb) || ["north", "south", "east", "west", "up", "down"].includes(verb)) {
+        let dir = ["north", "south", "east", "west", "up", "down"].includes(verb) ? verb : parts[1];
+        if (rooms[player.loc].exits[dir]) {
+            player.loc = rooms[player.loc].exits[dir];
+            return true; 
+        } else {
+            return `<span class="error">You can't go that way.</span>`;
+        }
+    }
+
+    if (["take", "get", "grab"].includes(verb)) {
+        let itemRequested = parts.slice(1).join(" ");
+        let roomItems = rooms[player.loc].items;
+        let index = roomItems.indexOf(itemRequested);
+        if (index > -1) {
+            player.inv.push(itemRequested);
+            rooms[player.loc].items.splice(index, 1);
+            return `You picked up the ${itemRequested}.`;
+        }
+        return `<span class="error">There is no ${itemRequested} here.</span>`;
+    }
+
+    if (["drop", "leave", "put"].includes(verb)) {
+        let itemRequested = parts.slice(1).join(" ");
+        let invIndex = player.inv.indexOf(itemRequested);
+        if (invIndex > -1) {
+            player.inv.splice(invIndex, 1);
+            rooms[player.loc].items.push(itemRequested);
+            
+            let msg = `You dropped the ${itemRequested}.`;
+            
+            if (player.loc === "home" && itemsData[itemRequested] && itemsData[itemRequested].value > 0) {
+                player.score += itemsData[itemRequested].value;
+                itemsData[itemRequested].value = 0; 
+                msg += ` <br><span style="color:#00ff00;">* Treasure secured! Points awarded! *</span>`;
+            }
+            return msg;
+        }
+        return `<span class="error">You don't have a ${itemRequested}.</span>`;
+    }
+
+    if (["hit", "attack", "kill", "strike"].includes(verb)) {
+        let withIndex = parts.indexOf("with");
+        
+        if (withIndex === -1 || withIndex === parts.length - 1) {
+            return `<span class="error">You must specify a weapon (e.g., 'hit witch with sword').</span>`;
+        }
+        
+        let targetName = parts.slice(1, withIndex).join(" ");
+        let weaponName = parts.slice(withIndex + 1).join(" ");
+        
+        if (!player.inv.includes(weaponName)) {
+            return `<span class="error">You don't have a ${weaponName} in your inventory.</span>`;
+        }
+
+        if (!itemsData[weaponName] || !itemsData[weaponName].isWeapon) {
+            return `<span class="error">The ${weaponName} isn't a very good weapon.</span>`;
+        }
+
+        let targetKey = null;
+        for (let key in npcs) {
+            if (npcs[key].name === targetName && npcs[key].loc === player.loc && !npcs[key].dead) {
+                targetKey = key;
+                break;
+            }
+        }
+
+        if (targetKey) {
+            let damage = Math.floor(Math.random() * 3) + 2; 
+            npcs[targetKey].hp -= damage;
+            
+            if (npcs[targetKey].hp <= 0) {
+                npcs[targetKey].dead = true;
+                return `<span class="combat">You strike the ${targetName} with the ${weaponName}! They drop dead.</span>`;
+            } else {
+                return `<span class="combat">You hit the ${targetName} with the ${weaponName}!</span>`;
+            }
+        } else {
+            return `<span class="error">There is no ${targetName} here to attack.</span>`;
+        }
+    }
+
+    if (["inventory", "inv", "i"].includes(verb)) {
+        if (player.inv.length === 0) return "Your inventory is empty.";
+        return `You are carrying: ${player.inv.join(", ")}`;
+    }
+
+    if (verb === "look" || verb === "l") {
+        return true; 
+    }
+
+    return `<span class="error">I don't understand that command. Try 'go north', 'take sword', 'drop gold', 'hit witch with sword', or 'inventory'.</span>`;
+}
+
+// Start Game
+printLog("Welcome back to the Valley. Gather treasure and return it Home to score points.");
+updateStatus();
+look();
+
+</script>
+</body>
+</html>
